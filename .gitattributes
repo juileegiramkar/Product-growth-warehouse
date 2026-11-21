@@ -7,3 +7,6 @@
 *.jpg    binary
 *.parquet binary
 *.duckdb binary
+
+# Keep GitHub language stats on the pipeline code, not notebook output
+*.ipynb linguist-documentation
