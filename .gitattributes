@@ -1,0 +1,9 @@
+# Everything runs inside Linux containers (bash, Python, dbt, Spark), so text
+# files must keep LF endings even on a Windows checkout with core.autocrlf=true.
+* text=auto eol=lf
+
+# Binary assets
+*.png    binary
+*.jpg    binary
+*.parquet binary
+*.duckdb binary
