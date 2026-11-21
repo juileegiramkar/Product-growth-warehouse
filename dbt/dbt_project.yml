@@ -1,0 +1,38 @@
+name: pulse
+version: "1.0.0"
+config-version: 2
+profile: pulse
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # first day of simulated history (matches generator PULSE_SIM_START)
+  pulse_start_date: "{{ env_var('PULSE_SIM_START', '2026-08-21') }}"
+  onboarding_steps: ["profile_photo", "follow_5_accounts", "first_post", "enable_notifications"]
+  incremental_lookback_days: 3
+
+models:
+  pulse:
+    +persist_docs: {relation: true, columns: true}
+    staging:
+      +materialized: view
+      +schema: staging
+    collab:
+      +enabled: "{{ var('enable_collab', false) | as_bool }}"
+      +materialized: table
+      +schema: collab
+    marts:
+      +materialized: table
+      core:
+        +schema: core
+      metrics:
+        +schema: metrics
+
+tests:
+  pulse:
+    +store_failures: false

@@ -1,0 +1,142 @@
+# One command: `docker compose up -d`
+#   Airflow UI  http://localhost:8080   (admin / admin; set AIRFLOW_PORT in .env if 8080 is taken)
+#   Dashboard   http://localhost:8501
+#   dbt docs    http://localhost:8081
+#   Trino       http://localhost:8085
+x-airflow: &airflow
+  image: pulse-airflow:latest
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION:-false}
+    AIRFLOW__CORE__PARALLELISM: "4"
+    AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: "30"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+    PULSE_HOME: /opt/pulse
+    PULSE_SIM_START: ${PULSE_SIM_START:-2026-08-21}
+    PULSE_SEED: ${PULSE_SEED:-42}
+    PULSE_RAW_DIR: /opt/pulse/data/lake/raw
+    PULSE_STAGING_DIR: /opt/pulse/data/lake/staging
+    PULSE_QUARANTINE_DIR: /opt/pulse/data/lake/quarantine
+    PULSE_WAREHOUSE_PATH: /opt/pulse/data/warehouse/pulse.duckdb
+    PULSE_EXTRACTS_DIR: /opt/pulse/data/extracts
+    DBT_PROFILES_DIR: /opt/pulse/dbt
+    SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY:-2g}
+    TRINO_HOST: trino
+    TRINO_PORT: "8080"
+    PULSE_ALERT_EMAIL: ${PULSE_ALERT_EMAIL:-}
+    PULSE_SLACK_WEBHOOK: ${PULSE_SLACK_WEBHOOK:-}
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - .:/opt/pulse
+  user: "50000:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate &&
+        (airflow users create --role Admin --username "$${AIRFLOW_ADMIN_USER}" \
+          --password "$${AIRFLOW_ADMIN_PASSWORD}" --firstname Pulse --lastname Admin \
+          --email admin@example.com || true) &&
+        cd /opt/pulse/dbt && ([ -f dbt_packages/dbt_utils/dbt_project.yml ] || dbt deps --quiet)
+    environment:
+      <<: *airflow-env
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-admin}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow
+    command: webserver
+    ports: ["${AIRFLOW_PORT:-8080}:8080"]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # One-shot tools container (no Airflow): `docker compose run --rm pipeline`
+  # runs scripts/bootstrap.sh; `docker compose run --rm pipeline -c "dbt ..."` for ad-hoc commands.
+  pipeline:
+    <<: *airflow
+    entrypoint: ["bash"]
+    command: ["scripts/bootstrap.sh"]
+    working_dir: /opt/pulse
+    depends_on: {}
+    profiles: ["tools"]
+
+  dashboard:
+    image: pulse-dashboard:latest
+    build:
+      context: .
+      dockerfile: docker/dashboard/Dockerfile
+    working_dir: /app
+    environment:
+      PULSE_EXTRACTS_DIR: /app/data/extracts
+    volumes:
+      - .:/app
+    ports: ["8501:8501"]
+    restart: unless-stopped
+
+  dbt-docs:
+    <<: *airflow
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        cd /opt/pulse/dbt
+        until [ -f /opt/pulse/data/warehouse/pulse.duckdb ]; do echo "waiting for first dbt run"; sleep 30; done
+        ([ -d dbt_packages/dbt_utils ] || dbt deps --quiet)
+        dbt docs generate --target-path /tmp/dbt-docs && dbt docs serve --target-path /tmp/dbt-docs --host 0.0.0.0 --port 8081 --no-browser
+    ports: ["8081:8081"]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  trino:
+    image: trinodb/trino:476
+    ports: ["8085:8080"]
+    volumes:
+      - ./docker/trino/catalog/hive.properties:/etc/trino/catalog/hive.properties:ro
+      - ./docker/trino/jvm.config:/etc/trino/jvm.config:ro
+      - ./data:/data
+      - ./trino:/queries:ro
+    mem_limit: 2g
+    restart: unless-stopped
+
+volumes:
+  pg-data:

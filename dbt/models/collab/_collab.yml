@@ -1,0 +1,40 @@
+version: 2
+
+# Canvas (collaboration app) extension. Disabled unless --vars '{enable_collab: true}'
+# so the Pulse DAG never depends on it. Run via the collab_daily_pipeline DAG.
+sources:
+  - name: collab
+    database: "{{ target.database }}"
+    schema: "{{ 'RAW' if target.type == 'snowflake' else 'main' }}"
+    config:
+      enabled: "{{ var('enable_collab', false) | as_bool }}"
+    meta:
+      external_location: "read_parquet('{{ env_var('PULSE_STAGING_DIR', '../data/lake/staging') }}/collab_events/event_date=*/*.parquet', hive_partitioning = true)"
+    tables:
+      - name: collab_events
+        loaded_at_field: _loaded_at
+        freshness:
+          warn_after: {count: 24, period: hour}
+          error_after: {count: 48, period: hour}
+
+models:
+  - name: stg_collab_events
+    description: Clean Canvas events (file opens/edits, comments, invites).
+    columns:
+      - name: event_id
+        tests: [unique, not_null]
+      - name: event_type
+        tests:
+          - accepted_values:
+              arguments: {values: [file_open, file_edit, comment, invite_sent, invite_accepted]}
+  - name: fct_team_activity
+    description: One row per team per day - editors, edits, comments, invites.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [team_id, activity_date]
+  - name: dim_teams
+    description: One row per team with week-1 collaboration flag and retention.
+    columns:
+      - name: team_id
+        tests: [unique, not_null]

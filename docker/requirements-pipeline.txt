@@ -1,0 +1,10 @@
+# Pipeline venv (/opt/pulse-venv) - kept separate from Airflow's own env
+numpy>=2.0,<3
+pandas>=2.2,<4
+pyarrow>=17
+faker>=30
+pyspark>=3.5,<3.6
+duckdb==2.0.0
+dbt-core==1.12.7
+dbt-duckdb==1.11.1
+trino>=0.330

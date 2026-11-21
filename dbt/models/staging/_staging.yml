@@ -1,0 +1,40 @@
+version: 2
+
+models:
+  - name: stg_events
+    description: Clean event stream. Grain = one event.
+    columns:
+      - name: event_id
+        description: Unique event id (redeliveries and client retries removed in Spark).
+        tests: [unique, not_null]
+      - name: event_type
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [signup, app_open, onboarding_step, post_created, like, comment, follow]
+      - name: user_id
+        tests: [not_null]
+      - name: event_ts
+        description: Event time in UTC (normalised from 5 client timestamp formats).
+        tests: [not_null]
+      - name: session_id
+        description: Derived in Spark with a 30-minute inactivity gap.
+        tests: [not_null]
+      - name: device
+        tests:
+          - accepted_values:
+              arguments:
+                values: [ios, android, web, unknown]
+      - name: step_name
+        tests:
+          - accepted_values:
+              arguments:
+                values: "{{ var('onboarding_steps') }}"
+  - name: stg_users
+    description: Users. Grain = one user.
+    columns:
+      - name: user_id
+        tests: [unique, not_null]
+      - name: signup_ts
+        tests: [not_null]

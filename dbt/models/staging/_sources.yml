@@ -1,0 +1,34 @@
+version: 2
+
+sources:
+  - name: lake
+    description: >
+      Clean, deduplicated, sessionised Parquet written by the PySpark job
+      (spark/clean_events.py). On DuckDB it is read in place from the lake;
+      on Snowflake it is loaded into PULSE.RAW (see snowflake/).
+    database: "{{ target.database }}"
+    schema: "{{ 'RAW' if target.type == 'snowflake' else 'main' }}"
+    meta:
+      external_location: "read_parquet('{{ env_var('PULSE_STAGING_DIR', '../data/lake/staging') }}/{name}/**/*.parquet', hive_partitioning = true, union_by_name = true)"
+    tables:
+      - name: events
+        description: One row per (deduplicated) app event, partitioned by event_date.
+        # Only committed partitions: a killed Spark job can leave hidden
+        # .spark-staging-*/_temporary dirs that a bare ** glob would read.
+        meta:
+          external_location: "read_parquet('{{ env_var('PULSE_STAGING_DIR', '../data/lake/staging') }}/events/event_date=*/*.parquet', hive_partitioning = true, union_by_name = true)"
+        loaded_at_field: _loaded_at
+        freshness:
+          warn_after: {count: 24, period: hour}
+          error_after: {count: 48, period: hour}
+        columns:
+          - name: event_id
+            tests: [not_null]
+      - name: users
+        description: One row per user (latest profile version wins).
+        meta:
+          external_location: "read_parquet('{{ env_var('PULSE_STAGING_DIR', '../data/lake/staging') }}/users/*.parquet', union_by_name = true)"
+        loaded_at_field: _loaded_at
+        freshness:
+          warn_after: {count: 24, period: hour}
+          error_after: {count: 48, period: hour}

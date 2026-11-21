@@ -1,0 +1,120 @@
+version: 2
+
+models:
+  - name: dim_users
+    description: One row per user with signup cohort, channel, device and first-24h onboarding flags.
+    columns:
+      - name: user_id
+        description: Primary key.
+        tests: [unique, not_null]
+      - name: signup_date
+        tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_date'), field: date_day}
+      - name: device
+        tests:
+          - accepted_values:
+              arguments: {values: [ios, android, web, unknown]}
+      - name: acquisition_channel
+        tests:
+          - accepted_values:
+              arguments: {values: [organic, ads, referral]}
+      - name: did_follow_5_accounts_24h
+        description: Followed 5 accounts within 24h of signup (the key predictor).
+        tests: [not_null]
+
+  - name: dim_date
+    description: Calendar dimension.
+    columns:
+      - name: date_day
+        tests: [unique, not_null]
+
+  - name: dim_posts
+    description: One row per post.
+    columns:
+      - name: post_id
+        tests: [unique, not_null]
+      - name: author_user_id
+        tests:
+          - relationships:
+              arguments: {to: ref('dim_users'), field: user_id}
+
+  - name: fct_user_activity
+    description: One row per user per active day (incremental, 3-day lookback for late events).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [user_id, activity_date]
+    columns:
+      - name: user_id
+        tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_users'), field: user_id}
+      - name: activity_date
+        tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_date'), field: date_day}
+          - is_recent:
+              arguments: {max_lag_days: 1}
+      - name: sessions
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1}
+      - name: days_since_signup
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0}
+
+  - name: fct_engagement
+    description: One row per engagement event (like, comment, follow).
+    columns:
+      - name: event_id
+        tests: [unique, not_null]
+      - name: event_type
+        tests:
+          - accepted_values:
+              arguments: {values: [like, comment, follow]}
+      - name: actor_user_id
+        tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_users'), field: user_id}
+      - name: target_user_id
+        tests:
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_users'), field: user_id}
+      - name: post_id
+        description: Liked/commented post. Orphans appear when the post event was quarantined (broken client clock).
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_posts')
+                field: post_id
+              config:
+                where: "event_type in ('like', 'comment')"
+                warn_if: ">0"
+                error_if: ">5000"   # ~0.1% of likes; see README data-quality section
+
+  - name: fct_onboarding
+    description: One row per user - which onboarding steps they finished, and when.
+    columns:
+      - name: user_id
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments: {to: ref('dim_users'), field: user_id}
+      - name: steps_completed
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 4}
+
+  - name: fct_user_retention
+    description: One row per user with day-1/7/14/30 retention flags and eligibility.
+    columns:
+      - name: user_id
+        tests: [unique, not_null]
